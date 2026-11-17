@@ -68,3 +68,7 @@ README.md
 
 # Rust build output
 osrender/target/
+
+# Runtime data (mounted by Compose, never baked into the image)
+output/
+uploads/

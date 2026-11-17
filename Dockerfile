@@ -101,6 +101,18 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # Deno JS runtime — required by yt-dlp for some extractor challenges.
 COPY --from=denoland/deno:bin@sha256:b507583d3c68ba69f3ed2ce5969ae5b8b70f43421c781279c7aea06435263543 /deno /usr/local/bin/deno
 
+# Native dependencies required to build node-canvas
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    build-essential \
+    libcairo2-dev \
+    libpango1.0-dev \
+    libjpeg-dev \
+    libgif-dev \
+    librsvg2-dev \
+    libpixman-1-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Helper token provider, baked in as a local Node script (no separate service).
 RUN git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider /opt/bgutil-provider \
     && cd /opt/bgutil-provider/server \

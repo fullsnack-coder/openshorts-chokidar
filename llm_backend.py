@@ -110,7 +110,8 @@ def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = N
     """
     import gemini_worker  # local import: keeps this module free of the google SDK
 
-    url = f"{base_url()}/chat/completions"
+    native_lmstudio = base_url().endswith("/api/v1")
+    url = f"{base_url()}/chat" if native_lmstudio else f"{base_url()}/chat/completions"
     model = model or model_name()
     messages = [
         {"role": "system", "content": "You answer with a single JSON object and nothing else."},
@@ -118,43 +119,56 @@ def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = N
     ]
     last_rejection: Optional[str] = None
     with _client() as client:
-        for fmt in _response_formats(schema):
-            body = {"model": model, "messages": messages, "temperature": 0.2, "stream": False}
-            if fmt is not None:
-                body["response_format"] = fmt
+        if native_lmstudio:
+            body = {"model": model, "input": prompt,
+                    "system_prompt": "Answer with a single JSON object and nothing else.",
+                    "reasoning": "off", "temperature": 0.2, "stream": False,
+                    "store": False}
             resp = client.post(url, json=body, headers=_headers())
-            if fmt is not None and _is_format_rejection(resp):
-                # The server does not know this response_format flavour; the
-                # next loop iteration asks for a looser one.
-                last_rejection = resp.text[:200]
-                continue
             if resp.status_code >= 400:
                 raise RuntimeError(
                     f"LLM server {resp.status_code} from {url}: {resp.text[:300]}")
             data = resp.json()
-            break
+            text = "".join(item.get("content", "") for item in data.get("output", [])
+                           if item.get("type") == "message")
         else:
-            raise RuntimeError(
-                f"LLM server rejected every response_format variant: {last_rejection}")
+            for fmt in _response_formats(schema):
+                body = {"model": model, "messages": messages, "temperature": 0.2, "stream": False}
+                if fmt is not None:
+                    body["response_format"] = fmt
+                resp = client.post(url, json=body, headers=_headers())
+                if fmt is not None and _is_format_rejection(resp):
+                    last_rejection = resp.text[:200]
+                    continue
+                if resp.status_code >= 400:
+                    raise RuntimeError(
+                        f"LLM server {resp.status_code} from {url}: {resp.text[:300]}")
+                data = resp.json()
+                break
+            else:
+                raise RuntimeError(
+                    f"LLM server rejected every response_format variant: {last_rejection}")
 
-    choices = data.get("choices") or []
-    text = ""
-    if choices:
-        msg = choices[0].get("message") or {}
-        text = msg.get("content") or ""
-        if isinstance(text, list):  # some servers return content parts
-            text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
+    if not native_lmstudio:
+        choices = data.get("choices") or []
+        text = ""
+        if choices:
+            msg = choices[0].get("message") or {}
+            text = msg.get("content") or ""
+            if isinstance(text, list):  # some servers return content parts
+                text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
     parsed = gemini_worker._parse_json_response_text(text)
     # Validate against the same schema Gemini enforces server-side, so a
     # local model that drops a field fails here with a readable error
     # (retried by the caller) instead of deep inside the clip pipeline.
     validated = schema.model_validate(parsed).model_dump()
 
-    usage = data.get("usage") or {}
+    usage = data.get("stats") if native_lmstudio else data.get("usage")
+    usage = usage or {}
     cost = {
-        "input_tokens": int(usage.get("prompt_tokens") or 0),
-        "output_tokens": int(usage.get("completion_tokens") or 0),
-        "thinking_tokens": 0,
+        "input_tokens": int(usage.get("input_tokens" if native_lmstudio else "prompt_tokens") or 0),
+        "output_tokens": int(usage.get("total_output_tokens" if native_lmstudio else "completion_tokens") or 0),
+        "thinking_tokens": int(usage.get("reasoning_output_tokens") or 0),
         "input_cost": 0.0,
         "output_cost": 0.0,
         "total_cost": 0.0,

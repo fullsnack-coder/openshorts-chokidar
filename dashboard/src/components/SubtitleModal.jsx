@@ -4,6 +4,7 @@ import { apiFetch } from '../lib/api';
 import RemotionPreview from './RemotionPreview';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
+import { replaceCaptionText } from '../lib/captionEdits.js';
 
 const FONT_OPTIONS = [
     { value: 'Anton', label: 'Anton' },
@@ -169,7 +170,6 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     // Remotion preview state
     const [captions, setCaptions] = useState([]);
     const [originalCaptions, setOriginalCaptions] = useState([]);
-    const [editableText, setEditableText] = useState('');
     const [durationSec, setDurationSec] = useState(30);
     const [captionsLoading, setCaptionsLoading] = useState(false);
     const [useRemotionPreview, setUseRemotionPreview] = useState(false);
@@ -185,7 +185,6 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                 if (data && data.captions && data.captions.length > 0) {
                     setCaptions(data.captions);
                     setOriginalCaptions(data.captions);
-                    setEditableText(data.captions.map(c => c.text).join(' '));
                     setDurationSec(data.durationSec || 30);
                     setUseRemotionPreview(true);
                 } else {
@@ -196,33 +195,20 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
             .finally(() => setCaptionsLoading(false));
     }, [isOpen, jobId, clipIndex]);
 
-    // When user edits text, redistribute words across original timestamps
-    const handleTextEdit = (newText) => {
-        setEditableText(newText);
-        const newWords = newText.split(/\s+/).filter(w => w.length > 0);
-        if (newWords.length === 0 || originalCaptions.length === 0) {
-            setCaptions([]);
-            return;
-        }
-
-        // Distribute new words across the time span of original captions
-        const totalDurationMs = originalCaptions[originalCaptions.length - 1].endMs - originalCaptions[0].startMs;
-        const startMs = originalCaptions[0].startMs;
-        const wordDurationMs = totalDurationMs / newWords.length;
-
-        const newCaptions = newWords.map((word, i) => ({
-            text: word,
-            startMs: Math.round(startMs + i * wordDurationMs),
-            endMs: Math.round(startMs + (i + 1) * wordDurationMs),
-        }));
-        setCaptions(newCaptions);
+    // Each field owns a fixed interval from the transcript. Text edits never
+    // change that interval or the timestamps of neighbouring captions.
+    const handleTextEdit = (index, text) => {
+        setCaptions(current => replaceCaptionText(current, index, text));
     };
+    const visibleCaptions = captions
+        .filter(c => c.text.trim())
+        .map(c => ({ ...c, text: c.text.trim() }));
 
     if (!isOpen) return null;
 
     // Build subtitle config for Remotion
     const subtitleConfig = {
-        captions,
+        captions: visibleCaptions,
         position,
         maxChars,
         maxDurationMs: maxDuration * 1000,
@@ -424,14 +410,29 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                     <span className={`text-muted transition-transform ${showTextEditor ? 'rotate-180' : ''}`}>▾</span>
                                 </button>
                                 {showTextEditor && (
-                                    <textarea
-                                        value={editableText}
-                                        onChange={(e) => handleTextEdit(e.target.value)}
-                                        rows={5}
-                                        dir="auto"
-                                        className="input-field resize-none leading-relaxed animate-fade"
-                                        placeholder="Edit subtitle text..."
-                                    />
+                                    <div className="space-y-2 animate-fade">
+                                        <p className="text-xs text-muted">
+                                            Correct each word at its original time. A phrase stays in the same interval.
+                                            Clear a field to hide it.
+                                        </p>
+                                        <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                                            {captions.map((caption, index) => (
+                                                <label key={index} className="flex items-center gap-3">
+                                                    <span className="text-xs text-muted tabular-nums shrink-0 w-28">
+                                                        {(caption.startMs / 1000).toFixed(2)}–{(caption.endMs / 1000).toFixed(2)} s
+                                                    </span>
+                                                    <input
+                                                        type="text"
+                                                        value={caption.text}
+                                                        onChange={e => handleTextEdit(index, e.target.value)}
+                                                        aria-label={`Caption ${index + 1}, ${(caption.startMs / 1000).toFixed(2)} seconds`}
+                                                        dir="auto"
+                                                        className="input-field flex-1 min-w-0"
+                                                    />
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </div>
                                 )}
                             </div>
                         )}
@@ -553,7 +554,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                             // (issue #69): send the edited words whenever the text
                             // differs from what the transcript produced.
                             const textEdited = originalCaptions.length > 0
-                                && editableText.trim() !== originalCaptions.map((c) => c.text).join(' ').trim();
+                                && captions.some((c, i) => c.text !== originalCaptions[i]?.text);
                             const styleOptions = {
                                 position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
                                 // Karaoke burn (server-side ASS render)
@@ -561,7 +562,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                 reveal: !oneWord && reveal, shadow, maxChars, maxDuration,
                                 // Remotion data
                                 remotion: useRemotionPreview ? subtitleConfig : null,
-                                captions: textEdited ? captions : null,
+                                captions: textEdited ? visibleCaptions : null,
                             };
                             const bulkRunning = bulkProgress?.running;
                             return (
@@ -572,7 +573,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                         </button>
                                         <button
                                             onClick={() => onGenerate(styleOptions)}
-                                            disabled={isProcessing}
+                                            disabled={isProcessing || (useRemotionPreview && visibleCaptions.length === 0)}
                                             className="btn-primary flex-1"
                                         >
                                             {(isProcessing && !bulkRunning) && <Loader2 size={16} className="animate-spin text-brassink" />}

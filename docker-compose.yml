@@ -1,7 +1,13 @@
 services:
   backend:
-    build: .
+    build:
+      context: .
+      args:
+        GPU: '1'
+    gpus: all
     container_name: openshorts-backend
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     ports:
       - "8000:8000"
     volumes:
