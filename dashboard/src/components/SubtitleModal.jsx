@@ -4,7 +4,7 @@ import { apiFetch } from '../lib/api';
 import RemotionPreview from './RemotionPreview';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
-import { replaceCaptionText } from '../lib/captionEdits.js';
+import { replaceCaptionText, updateCaptionTime, captionsToSrt, insertCaption } from '../lib/captionEdits.js';
 
 const FONT_OPTIONS = [
     { value: 'Anton', label: 'Anton' },
@@ -129,6 +129,8 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const [bgOpacity, setBgOpacity] = useState(0.0);
     const [animation, setAnimationState] = useState('pop');
     const [showTextEditor, setShowTextEditor] = useState(false);
+    const [editorMessage, setEditorMessage] = useState('');
+    const [newCaption, setNewCaption] = useState(null);
 
     // Karaoke (server-side ASS burn) state
     const [style, setStyle] = useState('karaoke'); // classic | karaoke
@@ -179,6 +181,8 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         if (!isOpen || !jobId || clipIndex === undefined) return;
 
         setCaptionsLoading(true);
+        setNewCaption(null);
+        setEditorMessage('');
         apiFetch(`/api/clip/${jobId}/${clipIndex}/transcript`)
             .then((res) => res.ok ? res.json() : null)
             .then((data) => {
@@ -200,9 +204,48 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const handleTextEdit = (index, text) => {
         setCaptions(current => replaceCaptionText(current, index, text));
     };
+    const handleTimeEdit = (index, field, input) => {
+        try {
+            setCaptions(updateCaptionTime(captions, index, field, input.value, durationSec));
+            setEditorMessage('');
+        } catch (error) {
+            input.value = (captions[index][field] / 1000).toFixed(3);
+            setEditorMessage(error.message);
+        }
+    };
+    const copyCaptions = async () => {
+        try {
+            await navigator.clipboard.writeText(captionsToSrt(captions));
+            setEditorMessage('Subtítulos del clip copiados en formato SRT.');
+        } catch {
+            setEditorMessage('No se pudo copiar. Comprueba el permiso del portapapeles.');
+        }
+    };
+    const beginInsert = (index) => {
+        const start = index > 0 ? captions[index - 1].endMs : 0;
+        const end = index < captions.length ? captions[index].startMs : durationSec * 1000;
+        setNewCaption({ index, text: '', start: (start / 1000).toFixed(3), end: (end / 1000).toFixed(3) });
+        setEditorMessage(end <= start ? 'No hay espacio libre. Ajusta los tiempos vecinos o elige otro hueco.' : '');
+    };
+    const addCaption = () => {
+        try {
+            setCaptions(insertCaption(captions, newCaption.index, newCaption.text, newCaption.start, newCaption.end, durationSec));
+            setNewCaption(null);
+            setEditorMessage('Subtítulo añadido. Pulsa apply to this clip para guardarlo en el vídeo.');
+        } catch (error) {
+            setEditorMessage(error.message);
+        }
+    };
+    const deleteCaption = (index) => {
+        setCaptions(current => current.filter((_, i) => i !== index));
+        // A pending insertion refers to positions in the previous list.
+        setNewCaption(null);
+        setEditorMessage('Rango eliminado. Pulsa apply to this clip para guardar. Para quitar todos, usa remove captions from this clip.');
+    };
     const visibleCaptions = captions
         .filter(c => c.text.trim())
-        .map(c => ({ ...c, text: c.text.trim() }));
+        .map(c => ({ ...c, text: c.text.trim() }))
+        .sort((a, b) => a.startMs - b.startMs);
 
     if (!isOpen) return null;
 
@@ -406,32 +449,68 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                     onClick={() => setShowTextEditor(!showTextEditor)}
                                     className="w-full flex items-center justify-between mb-2"
                                 >
-                                    <span className="eyebrow">Edit text ({captions.length} words)</span>
+                                    <span className="eyebrow">Edit text & timing ({captions.length} words)</span>
                                     <span className={`text-muted transition-transform ${showTextEditor ? 'rotate-180' : ''}`}>▾</span>
                                 </button>
+                                <button type="button" onClick={copyCaptions} className="btn-secondary w-full mb-2">Copiar subtítulos del clip (SRT)</button>
+                                {editorMessage && <p role="status" className="text-xs text-muted mb-2">{editorMessage}</p>}
                                 {showTextEditor && (
                                     <div className="space-y-2 animate-fade">
                                         <p className="text-xs text-muted">
-                                            Correct each word at its original time. A phrase stays in the same interval.
-                                            Clear a field to hide it.
+                                            Edita el texto y los tiempos en segundos. Sal del campo para confirmar el tiempo. Los demás rangos se conservan. Vacía un texto para ocultarlo.
                                         </p>
                                         <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                                            <button type="button" className="btn-secondary w-full" onClick={() => beginInsert(0)}>+ Añadir al principio</button>
                                             {captions.map((caption, index) => (
-                                                <label key={index} className="flex items-center gap-3">
-                                                    <span className="text-xs text-muted tabular-nums shrink-0 w-28">
-                                                        {(caption.startMs / 1000).toFixed(2)}–{(caption.endMs / 1000).toFixed(2)} s
-                                                    </span>
+                                                <div key={index} className="space-y-1 border-b border-rule pb-2">
+                                                    <div className="flex gap-2">
+                                                        {['startMs', 'endMs'].map(field => (
+                                                            <label key={field} className="flex-1 min-w-0 text-xs text-muted">
+                                                                {field === 'startMs' ? 'Inicio (s)' : 'Fin (s)'}
+                                                                <input key={`${index}-${field}-${caption[field]}`} type="number" min="0" max={durationSec} step="0.01"
+                                                                    defaultValue={(caption[field] / 1000).toFixed(3)}
+                                                                    onBlur={e => handleTimeEdit(index, field, e.target)}
+                                                                    onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                                    aria-label={`${field === 'startMs' ? 'Inicio' : 'Fin'} del subtítulo ${index + 1} en segundos`}
+                                                                    className="input-field w-full" />
+                                                            </label>
+                                                        ))}
+                                                    </div>
                                                     <input
                                                         type="text"
                                                         value={caption.text}
                                                         onChange={e => handleTextEdit(index, e.target.value)}
                                                         aria-label={`Caption ${index + 1}, ${(caption.startMs / 1000).toFixed(2)} seconds`}
                                                         dir="auto"
-                                                        className="input-field flex-1 min-w-0"
+                                                        className="input-field w-full min-w-0"
                                                     />
-                                                </label>
+                                                    <button type="button" className="btn-ghost w-full text-xs text-red-400" aria-label={`Eliminar rango ${index + 1}`} onClick={() => deleteCaption(index)}>
+                                                        Eliminar rango
+                                                    </button>
+                                                    <button type="button" className="btn-secondary w-full text-xs" onClick={() => beginInsert(index + 1)}>
+                                                        {index === captions.length - 1 ? '+ Añadir al final' : '+ Insertar después de este rango'}
+                                                    </button>
+                                                </div>
                                             ))}
                                         </div>
+                                        {newCaption && (
+                                            <div className="space-y-2 border border-rule rounded p-2">
+                                                <p className="text-xs">Nuevo subtítulo · posición {newCaption.index + 1}</p>
+                                                <label className="block text-xs">Texto
+                                                    <input type="text" value={newCaption.text} onChange={e => setNewCaption({ ...newCaption, text: e.target.value })} className="input-field w-full" dir="auto" />
+                                                </label>
+                                                <div className="flex gap-2">
+                                                    {['start', 'end'].map(field => (
+                                                        <label key={field} className="flex-1 min-w-0 text-xs">
+                                                            {field === 'start' ? 'Inicio nuevo (s)' : 'Fin nuevo (s)'}
+                                                            <input type="number" min="0" max={durationSec} step="0.01" value={newCaption[field]} onChange={e => setNewCaption({ ...newCaption, [field]: e.target.value })} className="input-field w-full" />
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                                <button type="button" className="btn-secondary" onClick={addCaption}>Añadir subtítulo</button>
+                                                <button type="button" className="btn-ghost" onClick={() => setNewCaption(null)}>Cancelar inserción</button>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -553,8 +632,10 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                             // Text edits must survive the server render path too
                             // (issue #69): send the edited words whenever the text
                             // differs from what the transcript produced.
-                            const textEdited = originalCaptions.length > 0
-                                && captions.some((c, i) => c.text !== originalCaptions[i]?.text);
+                            const textEdited = captions.length !== originalCaptions.length
+                                || captions.some((c, i) => c.text !== originalCaptions[i]?.text
+                                    || c.startMs !== originalCaptions[i]?.startMs
+                                    || c.endMs !== originalCaptions[i]?.endMs);
                             const styleOptions = {
                                 position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
                                 // Karaoke burn (server-side ASS render)
