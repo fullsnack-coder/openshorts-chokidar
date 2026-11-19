@@ -77,7 +77,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
         return () => window.removeEventListener('resize', check);
     }, [clip.why]);
     const [showDescModal, setShowDescModal] = useState(false);
-    const [showSubtitleModal, setShowSubtitleModal] = useState(false);
+    const [showSubtitleModal, setShowSubtitleModal] = useState(!!clip.subtitles_only);
     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
     const { plan } = useAuth();
     const videoRef = React.useRef(null);
@@ -443,7 +443,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             // Karaoke styles are burned server-side (ASS word-highlight render);
             // the in-browser Remotion path only handles classic styles, and only
             // when the server file has no burned-in content to preserve.
-            if (options.remotion && options.style !== 'karaoke' && !hasServerBurns) {
+            if (options.remotion && options.style !== 'karaoke' && !hasServerBurns && !clip.subtitles_only) {
                 // Accumulate layer and render all layers together
                 const newLayers = { ...activeLayers, subtitles: options.remotion };
                 setActiveLayers(newLayers);

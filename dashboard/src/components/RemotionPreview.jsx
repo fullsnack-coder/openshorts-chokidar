@@ -21,6 +21,9 @@ export default function RemotionPreview({
     hook = null,
     effects = null,
     className = '',
+    playerRef,
+    width = 1080,
+    height = 1920,
 }) {
     const fps = 30;
     const durationInFrames = Math.max(1, Math.round(durationInSeconds * fps));
@@ -30,24 +33,25 @@ export default function RemotionPreview({
             videoUrl,
             durationInFrames,
             fps,
-            width: 1080,
-            height: 1920,
+            width,
+            height,
             subtitles,
             hook,
             effects,
         }),
-        [videoUrl, durationInFrames, subtitles, hook, effects]
+        [videoUrl, durationInFrames, subtitles, hook, effects, width, height]
     );
 
     return (
         <div className={`w-full h-full ${className}`}>
             <Player
+                ref={playerRef}
                 component={ShortVideo}
                 inputProps={inputProps}
                 durationInFrames={durationInFrames}
                 fps={fps}
-                compositionWidth={1080}
-                compositionHeight={1920}
+                compositionWidth={width}
+                compositionHeight={height}
                 style={{
                     width: '100%',
                     height: '100%',

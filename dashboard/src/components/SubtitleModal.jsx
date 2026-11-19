@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Loader2 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import RemotionPreview from './RemotionPreview';
@@ -128,7 +128,11 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const [bgColor, setBgColor] = useState('#000000');
     const [bgOpacity, setBgOpacity] = useState(0.0);
     const [animation, setAnimationState] = useState('pop');
-    const [showTextEditor, setShowTextEditor] = useState(false);
+    const [editorTab, setEditorTab] = useState('text');
+    const [search, setSearch] = useState('');
+    const [page, setPage] = useState(0);
+    const playerRef = useRef(null);
+    const pageSize = 4;
     const [editorMessage, setEditorMessage] = useState('');
     const [newCaption, setNewCaption] = useState(null);
 
@@ -173,6 +177,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const [captions, setCaptions] = useState([]);
     const [originalCaptions, setOriginalCaptions] = useState([]);
     const [durationSec, setDurationSec] = useState(30);
+    const [previewWidth, setPreviewWidth] = useState(1080);
     const [captionsLoading, setCaptionsLoading] = useState(false);
     const [useRemotionPreview, setUseRemotionPreview] = useState(false);
 
@@ -181,6 +186,9 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         if (!isOpen || !jobId || clipIndex === undefined) return;
 
         setCaptionsLoading(true);
+        setPage(0);
+        setSearch('');
+        setEditorTab('text');
         setNewCaption(null);
         setEditorMessage('');
         apiFetch(`/api/clip/${jobId}/${clipIndex}/transcript`)
@@ -190,6 +198,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                     setCaptions(data.captions);
                     setOriginalCaptions(data.captions);
                     setDurationSec(data.durationSec || 30);
+                    setPreviewWidth(Math.round(1920 * (data.width || 1080) / (data.height || 1920)));
                     setUseRemotionPreview(true);
                 } else {
                     setUseRemotionPreview(false);
@@ -247,6 +256,15 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         .map(c => ({ ...c, text: c.text.trim() }))
         .sort((a, b) => a.startMs - b.startMs);
 
+    const matches = captions.map((caption, index) => ({ caption, index }))
+        .filter(({ caption }) => caption.text.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
+    const pageCount = Math.max(1, Math.ceil(matches.length / pageSize));
+    const currentPage = Math.min(page, pageCount - 1);
+    const pageRows = matches.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+    const seekCaption = (caption) => {
+        playerRef.current?.seekTo(Math.round(caption.startMs * 30 / 1000));
+        playerRef.current?.pause();
+    };
     if (!isOpen) return null;
 
     // Build subtitle config for Remotion
@@ -305,10 +323,10 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     };
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} size="xl" eyebrow="EDITOR · SUBTITLES" title="subtitles">
-            <div className="flex flex-col md:flex-row gap-6">
+        <Modal isOpen={isOpen} onClose={onClose} size="studio" eyebrow="EDITOR · SUBTITLES" title="editar subtítulos">
+            <div className="flex flex-col md:flex-row gap-5 md:h-[68vh] min-h-0">
                 {/* Left: Preview */}
-                <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-card border border-rule overflow-hidden relative aspect-[9/16] max-h-[600px]">
+                <div className="w-full md:w-[32%] shrink-0 flex flex-col items-center justify-center bg-black rounded-card border border-rule overflow-hidden relative h-[28vh] md:h-full">
                     {captionsLoading ? (
                         <div className="flex items-center gap-2 text-muted">
                             <Loader2 size={16} className="animate-spin" />
@@ -316,6 +334,9 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                         </div>
                     ) : useRemotionPreview ? (
                         <RemotionPreview
+                            playerRef={playerRef}
+                            width={previewWidth}
+                            height={1920}
                             videoUrl={videoUrl}
                             durationInSeconds={durationSec}
                             subtitles={subtitleConfig}
@@ -338,8 +359,96 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                 </div>
 
                 {/* Right: Controls */}
-                <div className="w-full md:w-80 flex flex-col">
-                    <div className="space-y-5 flex-1 overflow-y-auto custom-scrollbar pr-1">
+                <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+                    <div className="flex gap-2 border-b border-rule pb-3 mb-3 shrink-0" role="group" aria-label="Secciones del editor">
+                        <button type="button" aria-pressed={editorTab === 'text'} className={editorTab === 'text' ? 'btn-primary' : 'btn-secondary'} onClick={() => setEditorTab('text')}>Texto y tiempos</button>
+                        <button type="button" aria-pressed={editorTab === 'style'} className={editorTab === 'style' ? 'btn-primary' : 'btn-secondary'} onClick={() => setEditorTab('style')}>Estilo visual</button>
+                    </div>
+                    {editorTab === 'text' && useRemotionPreview && (<div className="flex items-center justify-between gap-2 py-2">
+                                            <button type="button" className="btn-secondary" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>← Anterior</button>
+                                            <label className="text-xs flex items-center gap-2">Página
+                                                <select aria-label="Ir a página de subtítulos" value={currentPage} onChange={e => setPage(Number(e.target.value))} className="input-field !py-1">
+                                                    {Array.from({ length: pageCount }, (_, i) => <option key={i} value={i}>{i + 1} / {pageCount}</option>)}
+                                                </select>
+                                            </label>
+                                            <button type="button" className="btn-secondary" disabled={currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>Siguiente →</button>
+                                        </div>)}
+                    <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1">
+                        {editorTab === 'text' && !useRemotionPreview && <p className="text-muted">{captionsLoading ? 'Cargando subtítulos…' : 'No hay transcripción disponible para editar.'}</p>}
+                        {/* Editable Transcript (collapsible) */}
+                        {editorTab === 'text' && useRemotionPreview && (
+                            <div>
+                                <div className="flex flex-wrap gap-2 items-center mb-3">
+                                    <input type="search" aria-label="Buscar subtítulos" placeholder="Buscar palabra o frase…" value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} className="input-field flex-1 min-w-0" />
+                                    <span className="text-xs text-muted">{matches.length} rangos</span>
+                                    <button type="button" onClick={copyCaptions} className="btn-secondary text-xs shrink-0" title="Copiar todos los subtítulos del clip en formato SRT">Copiar SRT</button>
+                                </div>
+                                {editorMessage && <p role="status" className="text-xs text-muted mb-2">{editorMessage}</p>}
+                                {(
+                                    <div className="space-y-2 animate-fade">
+                                        <div className="space-y-2">
+                                            <button type="button" className="btn-secondary w-full" onClick={() => beginInsert(0)}>+ Añadir al principio</button>
+                                            {pageRows.map(({ caption, index }) => (
+                                                <div key={index} className="grid grid-cols-1 lg:grid-cols-[150px_1fr_auto] items-end gap-2 rounded-input border border-rule p-2 bg-paper2">
+                                                    <div className="flex gap-2">
+                                                        {['startMs', 'endMs'].map(field => (
+                                                            <label key={field} className="flex-1 min-w-0 text-xs text-muted">
+                                                                {field === 'startMs' ? 'Inicio (s)' : 'Fin (s)'}
+                                                                <input key={`${index}-${field}-${caption[field]}`} type="number" min="0" max={durationSec} step="0.01"
+                                                                    defaultValue={(caption[field] / 1000).toFixed(3)}
+                                                                    onBlur={e => handleTimeEdit(index, field, e.target)}
+                                                                    onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                                    aria-label={`${field === 'startMs' ? 'Inicio' : 'Fin'} del subtítulo ${index + 1} en segundos`}
+                                                                    className="input-field w-full !px-2 !py-1.5" />
+                                                            </label>
+                                                        ))}
+                                                    </div>
+                                                    <input
+                                                        type="text"
+                                                        value={caption.text}
+                                                        onChange={e => handleTextEdit(index, e.target.value)}
+                                                        aria-label={`Caption ${index + 1}, ${(caption.startMs / 1000).toFixed(2)} seconds`}
+                                                        dir="auto"
+                                                        className="input-field w-full min-w-0"
+                                                    />
+                                                    <div className="flex items-center gap-1">
+                                                    <button type="button" onClick={() => seekCaption(caption)} className="btn-ghost text-xs" aria-label={`Ver rango ${index + 1}`}>▶ Ver</button>
+                                                    <button type="button" className="btn-ghost text-xs text-red-400" aria-label={`Eliminar rango ${index + 1}`} onClick={() => deleteCaption(index)}>
+                                                        Eliminar
+                                                    </button>
+                                                    <button type="button" className="btn-ghost text-xs" aria-label={`Insertar después del rango ${index + 1}`} onClick={() => beginInsert(index + 1)}>
+                                                        + Insertar
+                                                    </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            {pageRows.length === 0 && <p className="text-muted py-4">No hay coincidencias.</p>}
+                                        </div>
+                                        {newCaption && (
+                                            <div className="space-y-2 border border-rule rounded p-2">
+                                                <p className="text-xs">Nuevo subtítulo · posición {newCaption.index + 1}</p>
+                                                <label className="block text-xs">Texto
+                                                    <input type="text" value={newCaption.text} onChange={e => setNewCaption({ ...newCaption, text: e.target.value })} className="input-field w-full" dir="auto" />
+                                                </label>
+                                                <div className="flex gap-2">
+                                                    {['start', 'end'].map(field => (
+                                                        <label key={field} className="flex-1 min-w-0 text-xs">
+                                                            {field === 'start' ? 'Inicio nuevo (s)' : 'Fin nuevo (s)'}
+                                                            <input type="number" min="0" max={durationSec} step="0.01" value={newCaption[field]} onChange={e => setNewCaption({ ...newCaption, [field]: e.target.value })} className="input-field w-full" />
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                                <button type="button" className="btn-secondary" onClick={addCaption}>Añadir subtítulo</button>
+                                                <button type="button" className="btn-ghost" onClick={() => setNewCaption(null)}>Cancelar inserción</button>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+
+                        <div className="space-y-5" hidden={editorTab !== 'style'}>
                         {/* Caption presets (server-side karaoke burn) */}
                         <div>
                             <p className="eyebrow mb-2">Preset</p>
@@ -440,81 +549,6 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                 size="sm"
                             />
                         </div>
-
-                        {/* Editable Transcript (collapsible) */}
-                        {useRemotionPreview && (
-                            <div>
-                                <button
-                                    type="button"
-                                    onClick={() => setShowTextEditor(!showTextEditor)}
-                                    className="w-full flex items-center justify-between mb-2"
-                                >
-                                    <span className="eyebrow">Edit text & timing ({captions.length} words)</span>
-                                    <span className={`text-muted transition-transform ${showTextEditor ? 'rotate-180' : ''}`}>▾</span>
-                                </button>
-                                <button type="button" onClick={copyCaptions} className="btn-secondary w-full mb-2">Copiar subtítulos del clip (SRT)</button>
-                                {editorMessage && <p role="status" className="text-xs text-muted mb-2">{editorMessage}</p>}
-                                {showTextEditor && (
-                                    <div className="space-y-2 animate-fade">
-                                        <p className="text-xs text-muted">
-                                            Edita el texto y los tiempos en segundos. Sal del campo para confirmar el tiempo. Los demás rangos se conservan. Vacía un texto para ocultarlo.
-                                        </p>
-                                        <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
-                                            <button type="button" className="btn-secondary w-full" onClick={() => beginInsert(0)}>+ Añadir al principio</button>
-                                            {captions.map((caption, index) => (
-                                                <div key={index} className="space-y-1 border-b border-rule pb-2">
-                                                    <div className="flex gap-2">
-                                                        {['startMs', 'endMs'].map(field => (
-                                                            <label key={field} className="flex-1 min-w-0 text-xs text-muted">
-                                                                {field === 'startMs' ? 'Inicio (s)' : 'Fin (s)'}
-                                                                <input key={`${index}-${field}-${caption[field]}`} type="number" min="0" max={durationSec} step="0.01"
-                                                                    defaultValue={(caption[field] / 1000).toFixed(3)}
-                                                                    onBlur={e => handleTimeEdit(index, field, e.target)}
-                                                                    onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                                                                    aria-label={`${field === 'startMs' ? 'Inicio' : 'Fin'} del subtítulo ${index + 1} en segundos`}
-                                                                    className="input-field w-full" />
-                                                            </label>
-                                                        ))}
-                                                    </div>
-                                                    <input
-                                                        type="text"
-                                                        value={caption.text}
-                                                        onChange={e => handleTextEdit(index, e.target.value)}
-                                                        aria-label={`Caption ${index + 1}, ${(caption.startMs / 1000).toFixed(2)} seconds`}
-                                                        dir="auto"
-                                                        className="input-field w-full min-w-0"
-                                                    />
-                                                    <button type="button" className="btn-ghost w-full text-xs text-red-400" aria-label={`Eliminar rango ${index + 1}`} onClick={() => deleteCaption(index)}>
-                                                        Eliminar rango
-                                                    </button>
-                                                    <button type="button" className="btn-secondary w-full text-xs" onClick={() => beginInsert(index + 1)}>
-                                                        {index === captions.length - 1 ? '+ Añadir al final' : '+ Insertar después de este rango'}
-                                                    </button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                        {newCaption && (
-                                            <div className="space-y-2 border border-rule rounded p-2">
-                                                <p className="text-xs">Nuevo subtítulo · posición {newCaption.index + 1}</p>
-                                                <label className="block text-xs">Texto
-                                                    <input type="text" value={newCaption.text} onChange={e => setNewCaption({ ...newCaption, text: e.target.value })} className="input-field w-full" dir="auto" />
-                                                </label>
-                                                <div className="flex gap-2">
-                                                    {['start', 'end'].map(field => (
-                                                        <label key={field} className="flex-1 min-w-0 text-xs">
-                                                            {field === 'start' ? 'Inicio nuevo (s)' : 'Fin nuevo (s)'}
-                                                            <input type="number" min="0" max={durationSec} step="0.01" value={newCaption[field]} onChange={e => setNewCaption({ ...newCaption, [field]: e.target.value })} className="input-field w-full" />
-                                                        </label>
-                                                    ))}
-                                                </div>
-                                                <button type="button" className="btn-secondary" onClick={addCaption}>Añadir subtítulo</button>
-                                                <button type="button" className="btn-ghost" onClick={() => setNewCaption(null)}>Cancelar inserción</button>
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        )}
 
                         {/* Font Family */}
                         <div>
@@ -627,7 +661,8 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                         </div>
                     </div>
 
-                    <div className="mt-5 shrink-0 space-y-2">
+                    </div>
+                    <div className="mt-3 pt-3 border-t border-rule shrink-0 space-y-2">
                         {(() => {
                             // Text edits must survive the server render path too
                             // (issue #69): send the edited words whenever the text
@@ -661,7 +696,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                             {(isProcessing && !bulkRunning) ? 'generating...' : 'apply to this clip'}
                                         </button>
                                     </div>
-                                    {onApplyAll && bulkCount > 1 && (
+                                    {editorTab === 'style' && onApplyAll && bulkCount > 1 && (
                                         <button
                                             onClick={() => onApplyAll({ ...styleOptions, captions: null })}
                                             disabled={isProcessing}

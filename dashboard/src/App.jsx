@@ -1167,7 +1167,7 @@ function App() {
       // fall through the same gates.
       if (!isSignedIn) { stashPendingJob(data); setShowLogin(true); return; }
       if (!isManaged) { window.location.hash = '#/pricing'; return; }
-    } else if (keysMissing) {
+    } else if (keysMissing && data.processingMode !== 'subtitles') {
       setShowKeyModal(true);
       return;
     }
@@ -1196,6 +1196,7 @@ function App() {
       // Advanced generation controls: only sent when the user set them, so the
       // default request stays byte-identical to the pre-feature one.
       const advanced = {
+        processing_mode: data.processingMode || 'clips',
         target_clips: data.targetClips || null,
         clip_min_seconds: data.clipMinSeconds || null,
         clip_max_seconds: data.clipMaxSeconds || null,

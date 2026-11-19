@@ -5614,6 +5614,7 @@ async def process_estimate(req: EstimateRequest, request: Request):
 @app.post("/api/process")
 async def process_endpoint(
     request: Request,
+    processing_mode: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
     acknowledged: Optional[str] = Form(None),
@@ -5635,7 +5636,7 @@ async def process_endpoint(
     source_end: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
-    if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
+    if not api_key and not (llm_backend.active() and not BILLING_ENABLED) and processing_mode != 'subtitles' and 'application/json' not in request.headers.get('content-type', ''):
         # Self-host with an OpenAI-compatible server configured needs no
         # Google key for the core pipeline: the moment picker runs there and
         # the frame-based stages degrade on their own (layout_picker returns
@@ -5667,6 +5668,15 @@ async def process_endpoint(
         max_minutes = body.get("max_minutes")
         source_start = body.get("source_start")
         source_end = body.get("source_end")
+        processing_mode = body.get("processing_mode")
+
+    if processing_mode not in (None, 'clips', 'subtitles'):
+        raise HTTPException(status_code=400, detail='Unknown processing_mode')
+    subtitles_only = processing_mode == 'subtitles'
+    if subtitles_only and (url or thumbnail_session_id or upload_id or not file):
+        raise HTTPException(status_code=400, detail='Solo subtítulos requiere subir un archivo de vídeo.')
+    if not subtitles_only and not api_key and not (llm_backend.active() and not BILLING_ENABLED):
+        raise gemini_missing_error()
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -5746,6 +5756,8 @@ async def process_endpoint(
     # running this server. Every job then dies on `import cv2`. The quality
     # probe above already gets this right.
     cmd = [sys.executable, "-u", "main.py"] # -u for unbuffered
+    if subtitles_only:
+        cmd = [sys.executable, '-u', 'subtitle_job.py']
     env = child_env()
     if api_key:
         env["GEMINI_API_KEY"] = api_key # Override with key from request
@@ -5878,7 +5890,7 @@ async def process_endpoint(
                 buffer.write(content)
 
         upload_duration = _media_duration_seconds(input_path)
-        if MIN_SOURCE_SECONDS > 0 and 0 < upload_duration < MIN_SOURCE_SECONDS:
+        if not subtitles_only and MIN_SOURCE_SECONDS > 0 and 0 < upload_duration < MIN_SOURCE_SECONDS:
             os.remove(input_path)
             shutil.rmtree(job_output_dir, ignore_errors=True)
             _reject_short_source(upload_duration)
@@ -5886,8 +5898,11 @@ async def process_endpoint(
         cmd.extend(["-i", input_path])
 
     cmd.extend(["-o", job_output_dir])
-    if output_format and output_format != "auto":
+    if not subtitles_only and output_format and output_format != "auto":
         cmd.extend(["--format", output_format])
+    if subtitles_only:
+        env['AUTO_CAPTIONS'] = '1'
+        env.pop('AUTO_HOOK', None)
 
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
@@ -6767,6 +6782,8 @@ async def get_clip_transcript(job_id: str, clip_index: int, request: Request):
         "captions": captions,
         "durationSec": duration_sec,
         "language": transcript.get('language', 'en'),
+        "width": clip_data.get('width', 1080),
+        "height": clip_data.get('height', 1920),
     }
 
 

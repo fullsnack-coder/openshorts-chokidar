@@ -37,7 +37,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [url, setUrl] = useState('');
     const [file, setFile] = useState(null);
     const [fileSeconds, setFileSeconds] = useState(null);
-    const fileTooShort = fileSeconds != null && fileSeconds < MIN_SOURCE_SECONDS;
+    const [processingMode, setProcessingMode] = useState('clips');
+    const subtitlesOnly = processingMode === 'subtitles';
+    const fileTooShort = !subtitlesOnly && fileSeconds != null && fileSeconds < MIN_SOURCE_SECONDS;
     const [acknowledged, setAcknowledged] = useState(false);
     // {start, end} in seconds when the user picked a stretch under the cost line.
     const [range, setRange] = useState(null);
@@ -121,14 +123,15 @@ export default function MediaInput({ onProcess, isProcessing }) {
         e.preventDefault();
         if (!acknowledged) return;
         const advanced = {
+            processingMode,
             targetClips: targetClips || null,
             clipMinSeconds: clipMinSeconds || null,
             clipMaxSeconds: clipMaxSeconds || null,
-            autoHook,
+            autoHook: subtitlesOnly ? false : autoHook,
             autoHookStyle,
             layout,
-            sourceStart: range ? Math.round(range.start) : null,
-            sourceEnd: range ? Math.round(range.end) : null,
+            sourceStart: !subtitlesOnly && range ? Math.round(range.start) : null,
+            sourceEnd: !subtitlesOnly && range ? Math.round(range.end) : null,
         };
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
@@ -152,6 +155,11 @@ export default function MediaInput({ onProcess, isProcessing }) {
 
     return (
         <div className="card p-4 sm:p-6 animate-fade">
+            <div className="grid grid-cols-2 gap-2 mb-4" role="group" aria-label="Modo de procesamiento">
+                <button type="button" aria-pressed={!subtitlesOnly} className={!subtitlesOnly ? 'btn-primary' : 'btn-secondary'} onClick={() => setProcessingMode('clips')}>Generar clips</button>
+                <button type="button" aria-pressed={subtitlesOnly} className={subtitlesOnly ? 'btn-primary' : 'btn-secondary'} onClick={() => { setProcessingMode('subtitles'); setMode('file'); }}>Solo subtítulos</button>
+            </div>
+            {subtitlesOnly && <p className="text-sm text-muted mb-4">Sube tu vídeo completo, incluso de menos de 45 segundos. Conservamos su encuadre y duración. Después podrás corregir el texto, los tiempos y el estilo.</p>}
             <div className="flex gap-4 sm:gap-6 mb-6 border-b border-rule" data-tutorial="source-tabs">
                 <button
                     onClick={() => setMode('file')}
@@ -163,7 +171,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     <Upload size={16} className={`hidden sm:block ${mode === 'file' ? 'text-brass' : ''}`} />
                     Upload File
                 </button>
-                {youtubeUrlEnabled && (
+                {youtubeUrlEnabled && !subtitlesOnly && (
                     <button
                         onClick={() => setMode('url')}
                         className={`flex items-center gap-2 pb-3 px-1 -mb-px border-b-2 text-sm lowercase whitespace-nowrap transition-colors ${mode === 'url'
@@ -253,22 +261,22 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 />
                                 <Upload className="mx-auto mb-3 text-muted" size={18} />
                                 <p className="text-ink2 lowercase">Click to upload or drag and drop</p>
-                                <p className="readout mt-2">MP4, MOV up to 500MB · at least {MIN_SOURCE_SECONDS}s long</p>
+                                <p className="readout mt-2">{subtitlesOnly ? 'MP4, MOV hasta 500 MB · vídeo completo' : `MP4, MOV up to 500MB · at least ${MIN_SOURCE_SECONDS}s long`}</p>
                             </label>
                         )}
                     </div>
                 )}
 
-                <SourceCost
+                {!subtitlesOnly && <SourceCost
                     mode={mode}
                     url={url}
                     fileSeconds={fileSeconds}
                     range={range}
                     onRangeChange={setRange}
-                />
+                />}
 
                 {/* Output format selector */}
-                <div className="mt-5" data-tutorial="output-format">
+                {!subtitlesOnly && <div className="mt-5" data-tutorial="output-format">
                     <p className="eyebrow mb-2">Output format</p>
                     <div className="grid grid-cols-3 gap-2">
                         {[
@@ -301,10 +309,10 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             );
                         })}
                     </div>
-                </div>
+                </div>}
 
                 {/* Advanced generation controls — collapsed by default; blank = AI decides */}
-                <div className="mt-4">
+                {!subtitlesOnly && <div className="mt-4">
                     <button
                         type="button"
                         onClick={() => setShowAdvanced((v) => !v)}
@@ -404,6 +412,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     )}
                 </div>
 
+                }
                 <label className="flex items-start gap-2.5 mt-5 text-left text-[13px] sm:text-xs leading-relaxed text-muted cursor-pointer select-none">
                     <input
                         type="checkbox"
@@ -429,7 +438,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         </>
                     ) : (
                         <>
-                            Generate Clips
+                            {subtitlesOnly ? 'Generar subtítulos' : 'Generate Clips'}
                         </>
                     )}
                 </button>
